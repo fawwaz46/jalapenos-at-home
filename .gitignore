@@ -1,4 +1,5 @@
 weights/
 data/
 python/.venv/
-.vibe-wise/__pycache__/
+.vibe-wise/
+__pycache__/
