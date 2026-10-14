@@ -3,3 +3,4 @@ data/
 python/.venv/
 .vibe-wise/
 __pycache__/
+engine/target
