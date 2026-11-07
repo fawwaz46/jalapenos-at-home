@@ -4,15 +4,29 @@ use std::io::Read;
 
 use serde::Deserialize;
 
-pub struct Tensor{
+#[cfg(target_os = "macos")]
+mod cpu;
+#[cfg(target_os = "macos")]
+mod metal;
+mod model;
+pub use model::{Backend, Model};
+
+// Fixed for every Qwen3 model we use (0.6B, 1.7B, 8B).
+const HEAD_DIM: usize = 128; // numbers per head
+const ROPE_THETA: f32 = 1_000_000.0; // base for RoPE's rotation speeds
+
+pub struct Tensor {
     pub shape: Vec<usize>,
     pub data: Vec<u16>,
 }
+pub struct TensorF32 {
+    pub shape: Vec<usize>,
+    pub data: Vec<f32>,
+}
 
-pub struct Weights{
-   pub model_name: String,
-   pub tensors: HashMap<String, Tensor>
-
+pub struct Weights {
+    pub model_name: String,
+    pub tensors: HashMap<String, Tensor>,
 }
 
 // bf16 is the top half of an f32, so shifting it up gives the exact value.
@@ -28,7 +42,9 @@ struct HeaderEntry {
 
 // Loads every tensor from every .safetensors file in ../weights/<name>.
 pub fn load(name: &str) -> Weights {
-    let folder = format!("../weights/{}", name);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../weights")
+        .join(name);
 
     // every .safetensors file in the model folder = the shards
     let mut paths = Vec::new();
@@ -46,15 +62,18 @@ pub fn load(name: &str) -> Weights {
     for path in paths {
         let mut file = File::open(&path).expect("could not load da file");
         let mut first8 = [0u8; 8];
-        file.read_exact(&mut first8).expect("could not read 8 bytes");
+        file.read_exact(&mut first8)
+            .expect("could not read 8 bytes");
 
         let header_len = u64::from_le_bytes(first8);
 
         let mut header_bytes = vec![0u8; header_len as usize];
-        file.read_exact(&mut header_bytes).expect("could not read da header");
+        file.read_exact(&mut header_bytes)
+            .expect("could not read da header");
         let header_text = String::from_utf8(header_bytes).expect("dat shi is NOT a string gang");
 
-        let mut header: HashMap<String, serde_json::Value> = serde_json::from_str(&header_text).expect("header is not valid JSON");
+        let mut header: HashMap<String, serde_json::Value> =
+            serde_json::from_str(&header_text).expect("header is not valid JSON");
         header.remove("__metadata__");
 
         let mut contents: HashMap<String, HeaderEntry> = HashMap::new();
@@ -66,82 +85,29 @@ pub fn load(name: &str) -> Weights {
         let mut sorted: Vec<(String, HeaderEntry)> = contents.into_iter().collect();
         sorted.sort_by_key(|pair| pair.1.data_offsets[0]);
 
-        for(name, entry) in sorted{
+        for (name, entry) in sorted {
             let sz: usize = entry.data_offsets[1] - entry.data_offsets[0];
             let mut buff = vec![0u8; sz];
 
             file.read_exact(&mut buff).expect("couldn't read bytes");
             let mut temp = Vec::new();
 
-            for chunk in buff.chunks_exact(2){
+            for chunk in buff.chunks_exact(2) {
                 let value = u16::from_le_bytes([chunk[0], chunk[1]]);
                 temp.push(value)
             }
-            let tensor = Tensor { shape: entry.shape, data: temp };
+            let tensor = Tensor {
+                shape: entry.shape,
+                data: temp,
+            };
             tensor_map.insert(name, tensor);
         }
     }
 
-    Weights { model_name: name.to_string(), tensors: tensor_map }
-}
-
-//write a function that takes in a file and returns the list of tokenIDs and a Tensor for hidden_0
-pub fn embedding_load(file_name: &str) -> (Vec<usize>, Tensor){
-    let path: String = format!("../data/{}", file_name);
-
-    let mut file = File::open(&path).expect("could not open file");
-    let mut first8 = [0u8; 8];
-    file.read_exact(&mut first8).expect("could not read 8 bytes");
-
-    let header_len = u64::from_le_bytes(first8);
-    let mut header_bytes = vec![0u8; header_len as usize];
-
-    file.read_exact(&mut header_bytes).expect("could not read header bytes into buffer");
-
-    let header_text = String::from_utf8(header_bytes).expect("could not turn header bytes into string");
-    let mut header: HashMap<String, serde_json::Value> = serde_json::from_str(&header_text).expect("could not store values in map, maybe a json error?");
-
-    header.remove("__metadata__");
-
-    let mut contents: HashMap<String, HeaderEntry> = HashMap::new();
-
-    for (name, value) in header{
-        let entry: HeaderEntry = serde_json::from_value(value).expect("could not destructure into header value");
-        contents.insert(name, entry);
+    Weights {
+        model_name: name.to_string(),
+        tensors: tensor_map,
     }
-
-    let mut sorted: Vec<(String, HeaderEntry)> = contents.into_iter().collect();
-    sorted.sort_by_key(|pair| pair.1.data_offsets[0]);
-
-    let mut tok_ids = Vec::new();
-    let mut hidden_0 = Tensor { shape: Vec::new(), data: Vec::new() };
-
-    for (name, entry) in sorted{
-        
-        let sz: usize = entry.data_offsets[1] - entry.data_offsets[0];
-        let mut buff = vec![0u8; sz];
-
-        
-        file.read_exact(&mut buff).expect("could not read tensor bytes");
-        
-        let mut temp = Vec::new();
-        
-        if name == "token_ids"{
-            
-            for chunk in buff.chunks_exact(8){
-                let value = i64::from_le_bytes(chunk.try_into().unwrap()) as usize;
-                tok_ids.push(value)
-            }
-        } else if name == "hidden_0"{
-            for chunk in buff.chunks_exact(2){
-                let value = u16::from_le_bytes([chunk[0], chunk[1]]);
-                temp.push(value)
-            }
-            hidden_0 = Tensor { shape: entry.shape, data: temp };
-        }
-    }
-
-    (tok_ids, hidden_0)
 }
 
 /*
@@ -153,7 +119,7 @@ pub fn embedding_load(file_name: &str) -> (Vec<usize>, Tensor){
 6. Return a Tensor with shape [number of IDs, row length] and the output list as its data.
 */
 // Copies each token ID's row out of the embedding table, stacked into one Tensor.
-pub fn embed(weights: &Weights, token_ids: &Vec<usize>) -> Tensor {
+pub fn embed(weights: &Weights, token_ids: &[usize]) -> Tensor {
     let table = &weights.tensors["model.embed_tokens.weight"];
     let row_len = table.shape[1];
 
@@ -165,5 +131,217 @@ pub fn embed(weights: &Weights, token_ids: &Vec<usize>) -> Tensor {
         output.extend_from_slice(&table.data[start..end]);
     }
 
-    Tensor { shape: vec![token_ids.len(), row_len], data: output }
+    Tensor {
+        shape: vec![token_ids.len(), row_len],
+        data: output,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use cpu::matmul;
+
+#[cfg(not(target_os = "macos"))]
+pub fn matmul(x: &TensorF32, w: &Tensor) -> TensorF32 {
+    let tok_rows = x.shape[0];
+    let tok_len = x.shape[1];
+    let weight_rows = w.shape[0];
+
+    let mut output = Vec::new();
+
+    for t in 0..tok_rows {
+        for r in 0..weight_rows {
+            let mut sum = 0.0;
+            for i in 0..tok_len {
+                sum += x.data[t * tok_len + i] * bf16_to_f32(w.data[r * tok_len + i]);
+            }
+            output.push(sum);
+        }
+    }
+
+    TensorF32 {
+        shape: vec![tok_rows, weight_rows],
+        data: output,
+    }
+}
+
+pub fn rms_norm(x: &TensorF32, w: &Tensor) -> TensorF32 {
+    let tok_rows = x.shape[0];
+    let row_len = x.shape[1];
+
+    let mut output = Vec::new();
+    for t in 0..tok_rows {
+        let mut sum = 0.0;
+        for i in 0..row_len {
+            sum += x.data[t * row_len + i] * x.data[t * row_len + i];
+        }
+        let average = sum / (row_len as f32);
+        let size = (average + 1e-6).sqrt();
+
+        for i in 0..row_len {
+            output.push(x.data[t * row_len + i] / size * bf16_to_f32(w.data[i]));
+        }
+    }
+
+    TensorF32 {
+        shape: vec![tok_rows, row_len],
+        data: output,
+    }
+}
+// Rotates each (i, i+64) pair in every 128-number head by an angle that depends on the token's position.
+// Works for q (16 heads) and k (8 heads); the head count is row length / 128.
+pub fn rope(x: &TensorF32) -> TensorF32 {
+    let tok_rows = x.shape[0];
+    let row_len = x.shape[1];
+    let head_dim = HEAD_DIM;
+    let half = head_dim / 2;
+    let heads = row_len / head_dim;
+
+    let mut out = x.data.clone();
+
+    for t in 0..tok_rows {
+        let position = t as f32;
+        for h in 0..heads {
+            let head_start = t * row_len + h * head_dim;
+            for i in 0..half {
+                let freq = 1.0 / ROPE_THETA.powf(i as f32 / half as f32);
+                let angle = position * freq;
+                let a = x.data[head_start + i];
+                let b = x.data[head_start + i + half];
+                out[head_start + i] = a * angle.cos() - b * angle.sin();
+                out[head_start + i + half] = b * angle.cos() + a * angle.sin();
+            }
+        }
+    }
+
+    TensorF32 {
+        shape: vec![tok_rows, row_len],
+        data: out,
+    }
+}
+
+fn attention(
+    x: &TensorF32,
+    weights: &Weights,
+    layer: usize,
+    project: &impl Fn(&TensorF32, &Tensor) -> TensorF32,
+) -> TensorF32 {
+    //grab weights from tensor
+    let q_proj = &weights.tensors[&format!("model.layers.{layer}.self_attn.q_proj.weight")];
+    let k_proj = &weights.tensors[&format!("model.layers.{layer}.self_attn.k_proj.weight")];
+    let v_proj = &weights.tensors[&format!("model.layers.{layer}.self_attn.v_proj.weight")];
+    let q_norm = &weights.tensors[&format!("model.layers.{layer}.self_attn.q_norm.weight")];
+    let k_norm = &weights.tensors[&format!("model.layers.{layer}.self_attn.k_norm.weight")];
+
+    //compute q k and v for the tokens
+    let q = project(x, q_proj);
+    let k = project(x, k_proj);
+    let v = project(x, v_proj);
+
+    // split into heads
+    let tok_rows = x.shape[0];
+    let q_heads = q.shape[1] / HEAD_DIM;
+    let k_heads = k.shape[1] / HEAD_DIM;
+
+    //store the heads
+    let q_split = TensorF32 {
+        shape: vec![tok_rows * q_heads, HEAD_DIM],
+        data: q.data,
+    };
+    let k_split = TensorF32 {
+        shape: vec![tok_rows * k_heads, HEAD_DIM],
+        data: k.data,
+    };
+
+    //normalize the heads
+    let q_normed = rms_norm(&q_split, q_norm);
+    let k_normed = rms_norm(&k_split, k_norm);
+
+    //put back to one row per token, so rope's row number = token position
+    let q_back = TensorF32 {
+        shape: vec![tok_rows, q_heads * HEAD_DIM],
+        data: q_normed.data,
+    };
+    let k_back = TensorF32 {
+        shape: vec![tok_rows, k_heads * HEAD_DIM],
+        data: k_normed.data,
+    };
+
+    //run rope on them
+    let q_rope = rope(&q_back);
+    let k_rope = rope(&k_back);
+
+    //attention setup
+    let q_len = q_heads * HEAD_DIM; // 2048: one token's row in q_rope and output
+    let kv_len = k_heads * HEAD_DIM; // 1024: one token's row in k_rope and v
+    let group = q_heads / k_heads; // 2: q heads per kv head
+    let scale = (HEAD_DIM as f32).sqrt(); // 11.31: scores get divided by this
+    let mut output = vec![0.0f32; tok_rows * q_len]; // [35, 2048] of zeros, filled by the loop
+
+    for t in 0..tok_rows {
+        // every token
+        for h in 0..q_heads {
+            // every q head
+            let kv_h = h / group; // which k/v head this q head reads
+            let q_start = t * q_len + h * HEAD_DIM; // where this head starts in q_rope and output
+
+            //scores: one per token 0..=t, how well this q head matches that token's k head
+            let mut scores = Vec::new();
+            for s in 0..=t {
+                let k_start = s * kv_len + kv_h * HEAD_DIM; // skip s tokens, then kv_h heads
+                let mut dot = 0.0;
+                for i in 0..HEAD_DIM {
+                    dot += q_rope.data[q_start + i] * k_rope.data[k_start + i];
+                }
+                scores.push(dot / scale);
+            }
+
+            //softmax: make every score positive (exp), so they can become shares that add to 1
+            let mut max = f32::NEG_INFINITY;
+            for &sc in &scores {
+                if sc > max {
+                    max = sc;
+                } // biggest score
+            }
+            let mut total = 0.0;
+            for sc in scores.iter_mut() {
+                *sc = (*sc - max).exp(); // minus max = overflow safety, same shares
+                total += *sc;
+            }
+
+            //mix v: add each token's v head, times its share, into this head's spot in output
+            for s in 0..=t {
+                let share = scores[s] / total;
+                let v_start = s * kv_len + kv_h * HEAD_DIM; // same jump as k
+                for i in 0..HEAD_DIM {
+                    output[q_start + i] += share * v.data[v_start + i];
+                }
+            }
+        }
+    }
+
+    //o_proj: blend the 16 heads' results together, [35, 2048] -> [35, 2048]
+    let o_proj = &weights.tensors[&format!("model.layers.{layer}.self_attn.o_proj.weight")];
+    let out = TensorF32 {
+        shape: vec![tok_rows, q_len],
+        data: output,
+    };
+    project(&out, o_proj)
+}
+
+fn mlp(
+    x: &TensorF32,
+    weights: &Weights,
+    layer: usize,
+    project: &impl Fn(&TensorF32, &Tensor) -> TensorF32,
+) -> TensorF32 {
+    let prefix = format!("model.layers.{layer}.mlp");
+    let mut gate = project(x, &weights.tensors[&format!("{prefix}.gate_proj.weight")]);
+    let up = project(x, &weights.tensors[&format!("{prefix}.up_proj.weight")]);
+    for (gate, up) in gate.data.iter_mut().zip(up.data) {
+        *gate = (*gate / (1.0 + (-*gate).exp())) * up;
+    }
+    project(
+        &gate,
+        &weights.tensors[&format!("{prefix}.down_proj.weight")],
+    )
 }

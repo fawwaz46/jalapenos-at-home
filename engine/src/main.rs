@@ -1,17 +1,27 @@
-use std::time::Instant;
+use std::error::Error;
+use std::io;
 
-use engine::{embed, embedding_load, load};
+use engine::{Backend, Model};
 
-fn main(){
-    let start = Instant::now();
-    let weights = load("Qwen3-1.7B");
-    println!("{}: {} tensors loaded in {:.2?}", weights.model_name, weights.tensors.len(), start.elapsed());
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut args = std::env::args().skip(1);
+    let backend = match args.next().as_deref() {
+        Some("cpu") => Backend::Cpu,
+        Some("metal") => Backend::Metal,
+        _ => return Err("usage: engine <cpu|metal> <model> <new tokens> < prompt.json".into()),
+    };
+    let name = args.next().ok_or("missing model")?;
+    let count = args.next().ok_or("missing token count")?.parse()?;
+    if args.next().is_some() {
+        return Err("unexpected argument".into());
+    }
+    let prompt: Vec<usize> = serde_json::from_reader(io::stdin().lock())?;
+    if prompt.is_empty() {
+        return Err("prompt is empty".into());
+    }
 
-    let (token_ids, hidden_0) = embedding_load("reference_qwen3-1.7b_0.safetensors");
-    println!("token ids: {} (first 3: {:?})", token_ids.len(), &token_ids[..3]);
-
-    let output = embed(&weights, &token_ids);
-    println!("embedding shape: {:?}", output.shape);            // expect [35, 2048]
-    println!("embedding first 3: {:?}", &output.data[..3]);     // expect [48404, 48224, 15377]
-    println!("matches hidden_0: {}", output.data == hidden_0.data);
+    let model = Model::load(&name, backend)?;
+    let tokens = model.generate(&prompt, count);
+    println!("{}", serde_json::to_string(&tokens[prompt.len()..])?);
+    Ok(())
 }
