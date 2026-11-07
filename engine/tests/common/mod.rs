@@ -32,13 +32,17 @@ pub fn reference_load(file_name: &str, hidden_name: &str) -> (Vec<usize>, Tensor
 
     let (_, token_bytes) = read_tensor("token_ids");
     let token_ids = token_bytes
-        .chunks_exact(8)
-        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()) as usize)
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_le_bytes(*chunk) as usize)
         .collect();
     let (shape, hidden_bytes) = read_tensor(hidden_name);
     let data = hidden_bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| u16::from_le_bytes(*chunk))
         .collect();
-    (token_ids, Tensor { shape, data })
+    (token_ids, Tensor::bf16(shape, data))
 }

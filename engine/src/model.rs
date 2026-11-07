@@ -3,8 +3,8 @@ use std::{fs, path::Path};
 use serde::Deserialize;
 
 use crate::{
-    LayerCache, Tensor, TensorF32, Weights, attention, bf16_to_f32, embed, load, matmul, mlp,
-    rms_norm,
+    LayerCache, Tensor, TensorF32, Weights, attention, bf16_to_f32, embed, matmul, mlp, rms_norm,
+    try_load,
 };
 
 #[derive(Clone, Copy)]
@@ -61,7 +61,7 @@ impl Model {
         Ok(Self {
             #[cfg(target_os = "macos")]
             metal,
-            weights: load(name),
+            weights: try_load(name)?,
             config,
         })
     }

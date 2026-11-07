@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
 
 use serde::Deserialize;
 
@@ -9,6 +10,8 @@ mod cpu;
 #[cfg(target_os = "macos")]
 mod metal;
 mod model;
+mod mxfp4;
+pub use mxfp4::Mxfp4;
 mod speculative;
 pub use model::{Backend, Model};
 pub use speculative::{SpeculativeResult, generate_speculative};
@@ -20,6 +23,38 @@ const ROPE_THETA: f32 = 1_000_000.0; // base for RoPE's rotation speeds
 pub struct Tensor {
     pub shape: Vec<usize>,
     pub data: Vec<u16>,
+    pub mxfp4: Option<Mxfp4>,
+}
+
+impl Tensor {
+    pub fn bf16(shape: Vec<usize>, data: Vec<u16>) -> Self {
+        Self {
+            shape,
+            data,
+            mxfp4: None,
+        }
+    }
+
+    pub fn quantized(
+        shape: Vec<usize>,
+        packed: Vec<u8>,
+        scales: Vec<u8>,
+    ) -> Result<Self, &'static str> {
+        let mxfp4 = Mxfp4 { packed, scales };
+        mxfp4.validate(&shape)?;
+        Ok(Self {
+            shape,
+            data: Vec::new(),
+            mxfp4: Some(mxfp4),
+        })
+    }
+
+    pub(crate) fn values(&self, range: Range<usize>) -> Vec<f32> {
+        match &self.mxfp4 {
+            Some(mxfp4) => mxfp4.values(range),
+            None => self.data[range].iter().copied().map(bf16_to_f32).collect(),
+        }
+    }
 }
 pub struct TensorF32 {
     pub shape: Vec<usize>,
@@ -36,80 +71,130 @@ pub fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct HeaderEntry {
+    dtype: String,
     shape: Vec<usize>,
-    data_offsets: Vec<usize>,
+    data_offsets: [u64; 2],
 }
 
-// Loads every tensor from every .safetensors file in ../weights/<name>.
 pub fn load(name: &str) -> Weights {
+    try_load(name).expect("could not load model weights")
+}
+
+fn try_load(name: &str) -> Result<Weights, Box<dyn std::error::Error>> {
     let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../weights")
         .join(name);
-
-    // every .safetensors file in the model folder = the shards
-    let mut paths = Vec::new();
-    for item in fs::read_dir(&folder).expect("could not open model folder") {
-        let path = item.expect("could not read folder item").path();
-        if path.extension().is_some_and(|ext| ext == "safetensors") {
-            paths.push(path);
-        }
-    }
+    let mut paths = fs::read_dir(&folder)?
+        .map(|item| item.map(|item| item.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.retain(|path| path.extension().is_some_and(|ext| ext == "safetensors"));
     paths.sort();
-
-    // made once, outside the loop, so both shards add to the same map
-    let mut tensor_map: HashMap<String, Tensor> = HashMap::new();
-
+    if paths.is_empty() {
+        return Err("model directory has no safetensors files".into());
+    }
+    let mut tensors = HashMap::new();
+    let mut packed = HashMap::new();
+    let mut scales = HashMap::new();
     for path in paths {
-        let mut file = File::open(&path).expect("could not load da file");
-        let mut first8 = [0u8; 8];
-        file.read_exact(&mut first8)
-            .expect("could not read 8 bytes");
-
+        let mut file = File::open(&path)?;
+        let mut first8 = [0; 8];
+        file.read_exact(&mut first8)?;
         let header_len = u64::from_le_bytes(first8);
-
-        let mut header_bytes = vec![0u8; header_len as usize];
-        file.read_exact(&mut header_bytes)
-            .expect("could not read da header");
-        let header_text = String::from_utf8(header_bytes).expect("dat shi is NOT a string gang");
-
-        let mut header: HashMap<String, serde_json::Value> =
-            serde_json::from_str(&header_text).expect("header is not valid JSON");
-        header.remove("__metadata__");
-
-        let mut contents: HashMap<String, HeaderEntry> = HashMap::new();
-        for (name, value) in header {
-            let entry: HeaderEntry = serde_json::from_value(value).expect("bad header entry");
-            contents.insert(name, entry);
+        if header_len > 100_000_000 || header_len + 8 > file.metadata()?.len() {
+            return Err("invalid safetensors header length".into());
         }
-
-        let mut sorted: Vec<(String, HeaderEntry)> = contents.into_iter().collect();
-        sorted.sort_by_key(|pair| pair.1.data_offsets[0]);
-
-        for (name, entry) in sorted {
-            let sz: usize = entry.data_offsets[1] - entry.data_offsets[0];
-            let mut buff = vec![0u8; sz];
-
-            file.read_exact(&mut buff).expect("couldn't read bytes");
-            let mut temp = Vec::new();
-
-            for chunk in buff.chunks_exact(2) {
-                let value = u16::from_le_bytes([chunk[0], chunk[1]]);
-                temp.push(value)
+        let mut header_bytes = vec![0; header_len as usize];
+        file.read_exact(&mut header_bytes)?;
+        let mut header: HashMap<String, serde_json::Value> = serde_json::from_slice(&header_bytes)?;
+        let metadata = header.remove("__metadata__");
+        let quantized = metadata
+            .as_ref()
+            .and_then(|m| m.get("format"))
+            .and_then(|v| v.as_str())
+            == Some("jalapenos-mxfp4-v1");
+        let mut entries = header
+            .into_iter()
+            .map(|(name, value)| {
+                serde_json::from_value::<HeaderEntry>(value).map(|entry| (name, entry))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|(_, entry)| entry.data_offsets[0]);
+        for (name, entry) in entries {
+            let [start, end] = entry.data_offsets;
+            let base = 8 + header_len;
+            if start > end || end > file.metadata()?.len() - base {
+                return Err(format!("invalid tensor offsets: {name}").into());
             }
-            let tensor = Tensor {
-                shape: entry.shape,
-                data: temp,
-            };
-            tensor_map.insert(name, tensor);
+            let mut bytes = vec![0; (end - start).try_into()?];
+            file.seek(SeekFrom::Start(base + start))?;
+            file.read_exact(&mut bytes)?;
+            let elements = entry
+                .shape
+                .iter()
+                .try_fold(1usize, |size, &dim| size.checked_mul(dim))
+                .ok_or("tensor shape overflow")?;
+            if quantized && entry.dtype == "U8" {
+                if elements != bytes.len() {
+                    return Err(format!("invalid packed tensor size: {name}").into());
+                }
+                if let Some(name) = name.strip_suffix(".mxfp4_packed") {
+                    if packed
+                        .insert(name.to_owned(), (entry.shape, bytes))
+                        .is_some()
+                    {
+                        return Err("duplicate packed tensor".into());
+                    }
+                } else if let Some(name) = name.strip_suffix(".mxfp4_scales") {
+                    if scales
+                        .insert(name.to_owned(), (entry.shape, bytes))
+                        .is_some()
+                    {
+                        return Err("duplicate scale tensor".into());
+                    }
+                } else {
+                    return Err(format!("unexpected U8 tensor: {name}").into());
+                }
+            } else {
+                if !(entry.dtype == "BF16" || quantized && entry.dtype == "U16")
+                    || elements.checked_mul(2) != Some(bytes.len())
+                {
+                    return Err(format!("expected BF16 tensor: {name}").into());
+                }
+                let data = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                    .collect();
+                if tensors
+                    .insert(name, Tensor::bf16(entry.shape, data))
+                    .is_some()
+                {
+                    return Err("duplicate tensor".into());
+                }
+            }
         }
     }
-
-    Weights {
-        model_name: name.to_string(),
-        tensors: tensor_map,
+    for (name, (shape, packed)) in packed {
+        let (scale_shape, scales) = scales.remove(&name).ok_or("missing MXFP4 scales")?;
+        if shape.len() != 2 || shape[1] % 16 != 0 || scale_shape != [shape[0], shape[1] / 16] {
+            return Err(format!("invalid MXFP4 tensor shape: {name}").into());
+        }
+        let shape = vec![shape[0], shape[1].checked_mul(2).ok_or("shape overflow")?];
+        let tensor = Tensor::quantized(shape, packed, scales)?;
+        if tensors.insert(name, tensor).is_some() {
+            return Err("duplicate tensor".into());
+        }
     }
+    if !scales.is_empty() {
+        return Err("MXFP4 scales have no matching packed weights".into());
+    }
+    Ok(Weights {
+        model_name: name.to_owned(),
+        tensors,
+    })
 }
 
 /*
@@ -130,13 +215,19 @@ pub fn embed(weights: &Weights, token_ids: &[usize]) -> Tensor {
     for &id in token_ids {
         let start = id * row_len;
         let end = start + row_len;
-        output.extend_from_slice(&table.data[start..end]);
+        if table.mxfp4.is_some() {
+            output.extend(
+                table
+                    .values(start..end)
+                    .into_iter()
+                    .map(|value| (value.to_bits() >> 16) as u16),
+            );
+        } else {
+            output.extend_from_slice(&table.data[start..end]);
+        }
     }
 
-    Tensor {
-        shape: vec![token_ids.len(), row_len],
-        data: output,
-    }
+    Tensor::bf16(vec![token_ids.len(), row_len], output)
 }
 
 #[cfg(target_os = "macos")]
@@ -154,7 +245,11 @@ pub fn matmul(x: &TensorF32, w: &Tensor) -> TensorF32 {
         for r in 0..weight_rows {
             let mut sum = 0.0;
             for i in 0..tok_len {
-                sum += x.data[t * tok_len + i] * bf16_to_f32(w.data[r * tok_len + i]);
+                sum += x.data[t * tok_len + i]
+                    * match &w.mxfp4 {
+                        Some(q) => q.value(r * tok_len + i),
+                        None => bf16_to_f32(w.data[r * tok_len + i]),
+                    };
             }
             output.push(sum);
         }

@@ -17,11 +17,14 @@ def main():
     parser.add_argument("--tokens", type=int, default=15)
     parser.add_argument("--draft", nargs="?", const="Qwen3-0.6B")
     parser.add_argument("--gamma", type=int, default=5)
+    parser.add_argument("--mxfp4", action="store_true")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(ROOT / "weights" / args.model)
     prompt = tokenizer.encode(args.prompt, add_special_tokens=False)
     command = [ROOT / "engine/target/release/engine", args.backend, args.model, str(args.tokens)]
+    if args.mxfp4:
+        command += ["--mxfp4"]
     if args.draft:
         command += ["--draft", args.draft, "--gamma", str(args.gamma)]
     result = subprocess.run(

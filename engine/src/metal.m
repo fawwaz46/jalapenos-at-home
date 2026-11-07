@@ -7,6 +7,8 @@
 @property(nonatomic, strong) id<MTLCommandQueue> queue;
 @property(nonatomic, strong) id<MTLComputePipelineState> project;
 @property(nonatomic, strong) id<MTLComputePipelineState> projectToken;
+@property(nonatomic, strong) id<MTLComputePipelineState> projectMxfp4;
+@property(nonatomic, strong) id<MTLComputePipelineState> projectTokenMxfp4;
 @property(nonatomic, strong) NSCache<NSValue *, id<MTLBuffer>> *weights;
 @end
 
@@ -31,6 +33,12 @@ void *qwen_metal_create(const char *source) {
         metal.projectToken = [metal.device newComputePipelineStateWithFunction:
             [library newFunctionWithName:@"project_token"] error:&error];
         if (!metal.projectToken) { NSLog(@"%@", error); return NULL; }
+        metal.projectMxfp4 = [metal.device newComputePipelineStateWithFunction:
+            [library newFunctionWithName:@"project_mxfp4"] error:&error];
+        if (!metal.projectMxfp4) { NSLog(@"%@", error); return NULL; }
+        metal.projectTokenMxfp4 = [metal.device newComputePipelineStateWithFunction:
+            [library newFunctionWithName:@"project_token_mxfp4"] error:&error];
+        if (!metal.projectTokenMxfp4) { NSLog(@"%@", error); return NULL; }
         metal.queue = [metal.device newCommandQueue];
         metal.weights = [NSCache new];
         metal.weights.totalCostLimit = 4ull * 1024 * 1024 * 1024;
@@ -43,15 +51,28 @@ void qwen_metal_destroy(void *context) {
     CFRelease(context);
 }
 
-bool qwen_metal_matmul(void *context, const float *x, const uint16_t *w, float *y,
+bool qwen_metal_matmul(void *context, const float *x, const void *w, const uint8_t *scales, float *y,
                        uint32_t rows, uint32_t cols, uint32_t inner) {
     @autoreleasepool {
         QwenMetal *metal = (__bridge QwenMetal *)context;
         NSValue *key = [NSValue valueWithPointer:w];
+        size_t elements = (size_t)cols * inner;
+        size_t weightBytes = scales ? elements / 2 : elements * sizeof(uint16_t);
+        id<MTLBuffer> scaleBuffer = nil;
+        if (scales) {
+            NSValue *scaleKey = [NSValue valueWithPointer:scales];
+            scaleBuffer = [metal.weights objectForKey:scaleKey];
+            if (!scaleBuffer) {
+                scaleBuffer = [metal.device newBufferWithBytes:scales length:elements / 32
+                    options:MTLResourceStorageModeShared];
+                if (!scaleBuffer) return false;
+                [metal.weights setObject:scaleBuffer forKey:scaleKey cost:scaleBuffer.length];
+            }
+        }
         id<MTLBuffer> weights = [metal.weights objectForKey:key];
         if (!weights) {
             weights = [metal.device newBufferWithBytes:w
-                length:(size_t)cols * inner * sizeof(*w) options:MTLResourceStorageModeShared];
+                length:weightBytes options:MTLResourceStorageModeShared];
             if (!weights) return false;
             [metal.weights setObject:weights forKey:key cost:weights.length];
         }
@@ -71,12 +92,15 @@ bool qwen_metal_matmul(void *context, const float *x, const uint16_t *w, float *
         simd_uint3 dims = { rows, cols, inner };
         [encoder setBytes:&dims length:sizeof(dims) atIndex:3];
 
-        if (rows == 1 && metal.projectToken.threadExecutionWidth == 32) {
-            [encoder setComputePipelineState:metal.projectToken];
+        if (scaleBuffer) [encoder setBuffer:scaleBuffer offset:0 atIndex:4];
+        id<MTLComputePipelineState> tokenPipeline = scales ? metal.projectTokenMxfp4 : metal.projectToken;
+        id<MTLComputePipelineState> batchPipeline = scales ? metal.projectMxfp4 : metal.project;
+        if (rows == 1 && tokenPipeline.threadExecutionWidth == 32) {
+            [encoder setComputePipelineState:tokenPipeline];
             [encoder dispatchThreadgroups:MTLSizeMake((cols + 7) / 8, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
         } else {
-            [encoder setComputePipelineState:metal.project];
+            [encoder setComputePipelineState:batchPipeline];
             [encoder dispatchThreadgroups:MTLSizeMake((cols + 15) / 16, (rows + 15) / 16, 1)
                 threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
         }

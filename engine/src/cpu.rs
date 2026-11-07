@@ -1,4 +1,4 @@
-use crate::{Tensor, TensorF32, bf16_to_f32};
+use crate::{Tensor, TensorF32};
 
 #[link(name = "Accelerate", kind = "framework")]
 unsafe extern "C" {
@@ -30,16 +30,14 @@ pub fn matmul(input: &TensorF32, weights: &Tensor) -> TensorF32 {
     let cols = weights.shape[0];
     assert_eq!(weights.shape[1], inner);
     assert_eq!(input.data.len(), rows * inner);
-    assert_eq!(weights.data.len(), cols * inner);
 
     let mut data = vec![0.0; rows * cols];
     // Convert a few rows at a time so the vocabulary projection doesn't need a
     // second, f32 copy of the full embedding table.
     let block = 4096;
-    let mut converted = Vec::with_capacity(block.min(cols) * inner);
-    for (i, tile) in weights.data.chunks(block * inner).enumerate() {
-        converted.clear();
-        converted.extend(tile.iter().copied().map(bf16_to_f32));
+    for start in (0..cols).step_by(block) {
+        let end = (start + block).min(cols);
+        let converted = weights.values(start * inner..end * inner);
         // Each call writes a disjoint block of columns with the full output row stride.
         unsafe {
             cblas_sgemm(
@@ -47,7 +45,7 @@ pub fn matmul(input: &TensorF32, weights: &Tensor) -> TensorF32 {
                 NO_TRANSPOSE,
                 TRANSPOSE,
                 rows.try_into().unwrap(),
-                (tile.len() / inner).try_into().unwrap(),
+                (end - start).try_into().unwrap(),
                 inner.try_into().unwrap(),
                 1.0,
                 input.data.as_ptr(),
@@ -55,7 +53,7 @@ pub fn matmul(input: &TensorF32, weights: &Tensor) -> TensorF32 {
                 converted.as_ptr(),
                 inner.try_into().unwrap(),
                 0.0,
-                data.as_mut_ptr().add(i * block),
+                data.as_mut_ptr().add(start),
                 cols.try_into().unwrap(),
             );
         }
