@@ -1,19 +1,28 @@
 use std::error::Error;
 use std::io;
 
-use engine::{Backend, Model};
+use engine::{Backend, Model, generate_speculative};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let backend = match args.next().as_deref() {
         Some("cpu") => Backend::Cpu,
         Some("metal") => Backend::Metal,
-        _ => return Err("usage: engine <cpu|metal> <model> <new tokens> < prompt.json".into()),
+        _ => return Err("usage: engine <cpu|metal> <model> <new tokens> [--draft <model>] [--gamma <count>] < prompt.json".into()),
     };
     let name = args.next().ok_or("missing model")?;
     let count = args.next().ok_or("missing token count")?.parse()?;
-    if args.next().is_some() {
-        return Err("unexpected argument".into());
+    let mut draft_name = None;
+    let mut gamma = 5;
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--draft" => draft_name = Some(args.next().ok_or("missing draft model")?),
+            "--gamma" => gamma = args.next().ok_or("missing gamma")?.parse()?,
+            _ => return Err(format!("unexpected argument: {flag}").into()),
+        }
+    }
+    if gamma == 0 {
+        return Err("gamma must be positive".into());
     }
     let prompt: Vec<usize> = serde_json::from_reader(io::stdin().lock())?;
     if prompt.is_empty() {
@@ -21,7 +30,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let model = Model::load(&name, backend)?;
-    let tokens = model.generate(&prompt, count);
+    let tokens = if let Some(draft_name) = draft_name {
+        let draft = Model::load(&draft_name, backend)?;
+        let result = generate_speculative(&model, &draft, &prompt, count, gamma);
+        eprintln!(
+            "accepted {} / {} draft tokens in {} rounds",
+            result.accepted, result.drafted, result.rounds
+        );
+        result.tokens
+    } else {
+        model.generate(&prompt, count)
+    };
     println!("{}", serde_json::to_string(&tokens[prompt.len()..])?);
     Ok(())
 }

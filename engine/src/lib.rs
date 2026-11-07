@@ -9,7 +9,9 @@ mod cpu;
 #[cfg(target_os = "macos")]
 mod metal;
 mod model;
+mod speculative;
 pub use model::{Backend, Model};
+pub use speculative::{SpeculativeResult, generate_speculative};
 
 // Fixed for every Qwen3 model we use (0.6B, 1.7B, 8B).
 const HEAD_DIM: usize = 128; // numbers per head
@@ -189,7 +191,7 @@ pub fn rms_norm(x: &TensorF32, w: &Tensor) -> TensorF32 {
 }
 // Rotates each (i, i+64) pair in every 128-number head by an angle that depends on the token's position.
 // Works for q (16 heads) and k (8 heads); the head count is row length / 128.
-pub fn rope(x: &TensorF32) -> TensorF32 {
+fn rope(x: &TensorF32, offset: usize) -> TensorF32 {
     let tok_rows = x.shape[0];
     let row_len = x.shape[1];
     let head_dim = HEAD_DIM;
@@ -199,7 +201,7 @@ pub fn rope(x: &TensorF32) -> TensorF32 {
     let mut out = x.data.clone();
 
     for t in 0..tok_rows {
-        let position = t as f32;
+        let position = (offset + t) as f32;
         for h in 0..heads {
             let head_start = t * row_len + h * head_dim;
             for i in 0..half {
@@ -219,10 +221,26 @@ pub fn rope(x: &TensorF32) -> TensorF32 {
     }
 }
 
+#[derive(Default)]
+struct LayerCache {
+    keys: Vec<f32>,
+    values: Vec<f32>,
+    width: usize,
+}
+
+impl LayerCache {
+    fn truncate(&mut self, tokens: usize) {
+        self.keys.truncate(tokens * self.width);
+        self.values.truncate(tokens * self.width);
+    }
+}
+
 fn attention(
     x: &TensorF32,
     weights: &Weights,
     layer: usize,
+    offset: usize,
+    cache: &mut LayerCache,
     project: &impl Fn(&TensorF32, &Tensor) -> TensorF32,
 ) -> TensorF32 {
     //grab weights from tensor
@@ -267,12 +285,16 @@ fn attention(
     };
 
     //run rope on them
-    let q_rope = rope(&q_back);
-    let k_rope = rope(&k_back);
+    let q_rope = rope(&q_back, offset);
+    let k_rope = rope(&k_back, offset);
 
     //attention setup
     let q_len = q_heads * HEAD_DIM; // 2048: one token's row in q_rope and output
     let kv_len = k_heads * HEAD_DIM; // 1024: one token's row in k_rope and v
+    debug_assert_eq!(cache.keys.len(), offset * kv_len);
+    cache.width = kv_len;
+    cache.keys.extend(k_rope.data);
+    cache.values.extend(v.data);
     let group = q_heads / k_heads; // 2: q heads per kv head
     let scale = (HEAD_DIM as f32).sqrt(); // 11.31: scores get divided by this
     let mut output = vec![0.0f32; tok_rows * q_len]; // [35, 2048] of zeros, filled by the loop
@@ -284,13 +306,13 @@ fn attention(
             let kv_h = h / group; // which k/v head this q head reads
             let q_start = t * q_len + h * HEAD_DIM; // where this head starts in q_rope and output
 
-            //scores: one per token 0..=t, how well this q head matches that token's k head
+            //scores: one per visible token, how well this q head matches that token's k head
             let mut scores = Vec::new();
-            for s in 0..=t {
+            for s in 0..=offset + t {
                 let k_start = s * kv_len + kv_h * HEAD_DIM; // skip s tokens, then kv_h heads
                 let mut dot = 0.0;
                 for i in 0..HEAD_DIM {
-                    dot += q_rope.data[q_start + i] * k_rope.data[k_start + i];
+                    dot += q_rope.data[q_start + i] * cache.keys[k_start + i];
                 }
                 scores.push(dot / scale);
             }
@@ -309,11 +331,11 @@ fn attention(
             }
 
             //mix v: add each token's v head, times its share, into this head's spot in output
-            for s in 0..=t {
-                let share = scores[s] / total;
+            for (s, score) in scores.into_iter().enumerate() {
+                let share = score / total;
                 let v_start = s * kv_len + kv_h * HEAD_DIM; // same jump as k
                 for i in 0..HEAD_DIM {
-                    output[q_start + i] += share * v.data[v_start + i];
+                    output[q_start + i] += share * cache.values[v_start + i];
                 }
             }
         }

@@ -39,3 +39,37 @@ fn cpu_matches_python() {
 fn metal_matches_python() {
     check_reference(Backend::Metal);
 }
+
+#[test]
+#[ignore = "requires both Qwen models and the generated Python reference fixture"]
+fn speculative_matches_greedy_after_rejections() {
+    use std::time::Instant;
+
+    use engine::generate_speculative;
+
+    let target = Model::load("Qwen3-1.7B", Backend::Cpu).unwrap();
+    let draft = Model::load("Qwen3-0.6B", Backend::Cpu).unwrap();
+    let (expected, _) = reference_load("reference_qwen3-1.7b_0.safetensors", "hidden_1");
+    let prompt = &expected[..20];
+    let count = expected.len() - prompt.len();
+
+    let started = Instant::now();
+    let greedy = target.generate(prompt, count);
+    let greedy_time = started.elapsed();
+    let started = Instant::now();
+    let result = generate_speculative(&target, &draft, prompt, count, 5);
+    let speculative_time = started.elapsed();
+    assert_eq!(greedy, expected);
+    assert_eq!(result.tokens, greedy);
+    assert!(result.accepted > 0 && result.accepted < result.drafted);
+    assert!(result.rounds < count);
+    eprintln!(
+        "greedy: {greedy_time:.2?}, speculative: {speculative_time:.2?}, accepted: {}/{}",
+        result.accepted, result.drafted
+    );
+
+    let all_matched = generate_speculative(&target, &target, prompt, 3, 2);
+    assert_eq!(all_matched.tokens, expected[..23]);
+    assert_eq!(all_matched.accepted, 2);
+    assert_eq!(all_matched.rounds, 1);
+}

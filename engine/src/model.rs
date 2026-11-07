@@ -3,7 +3,8 @@ use std::{fs, path::Path};
 use serde::Deserialize;
 
 use crate::{
-    Tensor, TensorF32, Weights, attention, bf16_to_f32, embed, load, matmul, mlp, rms_norm,
+    LayerCache, Tensor, TensorF32, Weights, attention, bf16_to_f32, embed, load, matmul, mlp,
+    rms_norm,
 };
 
 #[derive(Clone, Copy)]
@@ -24,6 +25,21 @@ pub struct Model {
     metal: Option<crate::metal::Metal>,
     weights: Weights,
     config: Config,
+}
+
+pub(crate) struct KvCache {
+    layers: Vec<LayerCache>,
+    pub(crate) len: usize,
+}
+
+impl KvCache {
+    pub(crate) fn truncate(&mut self, len: usize) {
+        assert!(len <= self.len);
+        for layer in &mut self.layers {
+            layer.truncate(len);
+        }
+        self.len = len;
+    }
 }
 
 impl Model {
@@ -58,8 +74,29 @@ impl Model {
         matmul(input, weights)
     }
 
+    pub(crate) fn cache(&self) -> KvCache {
+        KvCache {
+            layers: (0..self.config.num_hidden_layers)
+                .map(|_| LayerCache::default())
+                .collect(),
+            len: 0,
+        }
+    }
+
+    pub(crate) fn context_limit(&self) -> usize {
+        self.config.max_position_embeddings
+    }
+
+    pub(crate) fn eos(&self) -> usize {
+        self.config.eos_token_id
+    }
+
     pub fn hidden(&self, tokens: &[usize], layers: usize) -> TensorF32 {
-        assert!(!tokens.is_empty() && tokens.len() <= self.config.max_position_embeddings);
+        self.append_hidden(tokens, layers, &mut self.cache())
+    }
+
+    fn append_hidden(&self, tokens: &[usize], layers: usize, cache: &mut KvCache) -> TensorF32 {
+        assert!(!tokens.is_empty() && cache.len + tokens.len() <= self.context_limit());
         assert!(layers <= self.config.num_hidden_layers);
 
         let embedded = embed(&self.weights, tokens);
@@ -74,7 +111,14 @@ impl Model {
                 &x,
                 &self.weights.tensors[&format!("{prefix}.input_layernorm.weight")],
             );
-            let attn = attention(&normalized, &self.weights, layer, &project);
+            let attn = attention(
+                &normalized,
+                &self.weights,
+                layer,
+                cache.len,
+                &mut cache.layers[layer],
+                &project,
+            );
             for (x, attn) in x.data.iter_mut().zip(attn.data) {
                 *x += attn;
             }
@@ -88,34 +132,54 @@ impl Model {
                 *x += ff;
             }
         }
+        cache.len += tokens.len();
         x
     }
 
     pub fn next_token(&self, tokens: &[usize]) -> usize {
-        let hidden = self.hidden(tokens, self.config.num_hidden_layers);
+        self.predict(tokens, &mut self.cache(), false)[0]
+    }
+
+    // Each returned token is the prediction after the corresponding input row.
+    // Ordinary generation only needs the last row, while verification needs all of them.
+    pub(crate) fn predict(&self, tokens: &[usize], cache: &mut KvCache, all: bool) -> Vec<usize> {
+        let mut hidden = self.append_hidden(tokens, self.config.num_hidden_layers, cache);
         let width = hidden.shape[1];
-        let last = TensorF32 {
-            shape: vec![1, width],
-            data: hidden.data[hidden.data.len() - width..].to_vec(),
-        };
-        let last = rms_norm(&last, &self.weights.tensors["model.norm.weight"]);
+        if !all {
+            let last_row = hidden.data.len() - width;
+            hidden.data.copy_within(last_row.., 0);
+            hidden.data.truncate(width);
+            hidden.shape[0] = 1;
+        }
+        let normalized = rms_norm(&hidden, &self.weights.tensors["model.norm.weight"]);
         let weights = self
             .weights
             .tensors
             .get("lm_head.weight")
             .unwrap_or(&self.weights.tensors["model.embed_tokens.weight"]);
-        let logits = self.project(&last, weights);
-        argmax(&logits.data)
+        let logits = self.project(&normalized, weights);
+        logits
+            .data
+            .chunks_exact(logits.shape[1])
+            .map(argmax)
+            .collect()
     }
 
     pub fn generate(&self, prompt: &[usize], count: usize) -> Vec<usize> {
         let mut tokens = prompt.to_vec();
-        for _ in 0..count {
-            let token = self.next_token(&tokens);
-            tokens.push(token);
-            if token == self.config.eos_token_id {
+        let count = count.min(self.context_limit().saturating_sub(prompt.len()));
+        if count == 0 {
+            return tokens;
+        }
+
+        let mut cache = self.cache();
+        let mut next = self.predict(prompt, &mut cache, false)[0];
+        for i in 0..count {
+            tokens.push(next);
+            if next == self.eos() || i + 1 == count {
                 break;
             }
+            next = self.predict(&[next], &mut cache, false)[0];
         }
         tokens
     }
