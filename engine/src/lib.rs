@@ -12,9 +12,11 @@ mod metal;
 mod model;
 mod mxfp4;
 pub use mxfp4::Mxfp4;
+mod scheduler;
 mod speculative;
 pub use model::{Backend, Model};
-pub use speculative::{SpeculativeResult, generate_speculative};
+pub use scheduler::DraftSchedule;
+pub use speculative::{SpeculativeResult, generate_scheduled, generate_speculative};
 
 // Fixed for every Qwen3 model we use (0.6B, 1.7B, 8B).
 const HEAD_DIM: usize = 128; // numbers per head

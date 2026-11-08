@@ -12,4 +12,10 @@ the packing follows the [ocp mx format](https://www.opencompute.org/documents/oc
 
 `python python/check_mxfp4.py` checks the quantized rust output against transformers using unpacked float32 weights. add `--backend metal` to check the gpu path too. run `cargo test --release --manifest-path engine/Cargo.toml --lib -- --ignored` for the metal kernel checks. these need access to a metal device.
 
-still want to schedule prefill/draft/verify across the cpu and gpu, and show the whole thing running live with benchmarks.
+add `--adaptive` with `--draft` to adjust how many tokens get guessed each round. it starts at `--gamma` (5 by default), grows by one when all guesses match, and halves when fewer than half match. `--max-gamma` caps it at 8 by default. fixed gamma still works without the adaptive flag.
+
+`--backend` picks where verification runs. `--draft-backend cpu` puts drafting on the cpu, and `--prefill-backend metal` puts prompt processing on the gpu for both models. leave them out to use each model's normal backend. the scheduler batches the previous target correction into verification, and combines deferred draft work with the next target token to avoid redundant model passes. it doesn't run the cpu and gpu phases concurrently.
+
+for example, `python python/run_rust.py "To make a simple loaf of bread" --backend metal --draft --draft-backend cpu --prefill-backend metal --adaptive --mxfp4 --stats`. stats go to stderr and show phase timings, forward-pass counts, and each round's draft budget and acceptance. timings measure model execution after loading weights. gpu checks and any speedup claims still need metal validation.
+
+still want to show the whole thing running live with benchmarks.

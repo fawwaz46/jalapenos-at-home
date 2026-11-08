@@ -73,3 +73,79 @@ fn speculative_matches_greedy_after_rejections() {
     assert_eq!(all_matched.accepted, 2);
     assert_eq!(all_matched.rounds, 1);
 }
+
+#[test]
+#[ignore = "requires the Qwen models and Python reference fixture"]
+fn adaptive_scheduler_matches_greedy_and_handles_short_budgets() {
+    use engine::{DraftSchedule, generate_scheduled};
+
+    let (expected, _) = reference_load("reference_qwen3-1.7b_0.safetensors", "hidden_1");
+    let prompt = &expected[..20];
+    for suffix in ["", "-MXFP4"] {
+        let target =
+            Model::load_with_prefill(&format!("Qwen3-1.7B{suffix}"), Backend::Cpu, Backend::Cpu)
+                .unwrap();
+        let draft =
+            Model::load_with_prefill(&format!("Qwen3-0.6B{suffix}"), Backend::Cpu, Backend::Cpu)
+                .unwrap();
+        let greedy = target.generate(prompt, 15);
+        for count in [0, 1, 15] {
+            let result = generate_scheduled(
+                &target,
+                &draft,
+                prompt,
+                count,
+                DraftSchedule::adaptive(5, 8).unwrap(),
+            );
+            assert_eq!(result.tokens, greedy[..prompt.len() + count]);
+            assert_eq!(result.rounds, result.verify.passes);
+            assert_eq!(result.rounds, result.round_stats.len());
+            assert_eq!(
+                result.drafted,
+                result
+                    .round_stats
+                    .iter()
+                    .map(|round| round.drafted)
+                    .sum::<usize>()
+            );
+            assert_eq!(
+                result.accepted,
+                result
+                    .round_stats
+                    .iter()
+                    .map(|round| round.accepted)
+                    .sum::<usize>()
+            );
+            assert!(
+                result
+                    .round_stats
+                    .iter()
+                    .all(|round| (1..=8).contains(&round.gamma))
+            );
+            if count > 0 {
+                assert_eq!(result.prefill.passes, 2);
+                assert!(result.draft.passes < result.drafted + result.rounds);
+            }
+            if count == 15 {
+                assert!(
+                    result
+                        .round_stats
+                        .iter()
+                        .any(|round| round.next_gamma != round.gamma)
+                );
+            }
+        }
+        let result = generate_scheduled(
+            &target,
+            &target,
+            prompt,
+            6,
+            DraftSchedule::adaptive(2, 4).unwrap(),
+        );
+        assert_eq!(result.tokens, greedy[..prompt.len() + 6]);
+        assert_eq!(result.round_stats[0].next_gamma, 3);
+        // The last accepted proposal and the bonus share one draft pass.
+        // The two rounds use one and two other drafting passes respectively.
+        assert_eq!(result.draft.passes, 4);
+    }
+}

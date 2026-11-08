@@ -7,7 +7,8 @@ use crate::{
     try_load,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Backend {
     Cpu,
     Metal,
@@ -23,6 +24,8 @@ struct Config {
 pub struct Model {
     #[cfg(target_os = "macos")]
     metal: Option<crate::metal::Metal>,
+    backend: Backend,
+    prefill_backend: Backend,
     weights: Weights,
     config: Config,
 }
@@ -44,33 +47,51 @@ impl KvCache {
 
 impl Model {
     pub fn load(name: &str, backend: Backend) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_with_prefill(name, backend, backend)
+    }
+
+    pub fn load_with_prefill(
+        name: &str,
+        backend: Backend,
+        prefill_backend: Backend,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let config = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../weights")
             .join(name)
             .join("config.json");
         let config = serde_json::from_slice(&fs::read(config)?)?;
         #[cfg(target_os = "macos")]
-        let metal = match backend {
-            Backend::Cpu => None,
-            Backend::Metal => Some(crate::metal::Metal::new()?),
-        };
+        let metal =
+            if matches!(backend, Backend::Metal) || matches!(prefill_backend, Backend::Metal) {
+                Some(crate::metal::Metal::new()?)
+            } else {
+                None
+            };
         #[cfg(not(target_os = "macos"))]
-        if matches!(backend, Backend::Metal) {
+        if matches!(backend, Backend::Metal) || matches!(prefill_backend, Backend::Metal) {
             return Err("Metal is only available on macOS".into());
         }
         Ok(Self {
             #[cfg(target_os = "macos")]
             metal,
+            backend,
+            prefill_backend,
             weights: try_load(name)?,
             config,
         })
     }
 
-    fn project(&self, input: &TensorF32, weights: &Tensor) -> TensorF32 {
+    fn project(&self, input: &TensorF32, weights: &Tensor, backend: Backend) -> TensorF32 {
         #[cfg(target_os = "macos")]
-        if let Some(metal) = &self.metal {
-            return metal.matmul(input, weights);
+        if matches!(backend, Backend::Metal) {
+            return self
+                .metal
+                .as_ref()
+                .expect("Metal was initialized at load time")
+                .matmul(input, weights);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = backend;
         matmul(input, weights)
     }
 
@@ -92,10 +113,16 @@ impl Model {
     }
 
     pub fn hidden(&self, tokens: &[usize], layers: usize) -> TensorF32 {
-        self.append_hidden(tokens, layers, &mut self.cache())
+        self.append_hidden(tokens, layers, &mut self.cache(), self.prefill_backend)
     }
 
-    fn append_hidden(&self, tokens: &[usize], layers: usize, cache: &mut KvCache) -> TensorF32 {
+    fn append_hidden(
+        &self,
+        tokens: &[usize],
+        layers: usize,
+        cache: &mut KvCache,
+        backend: Backend,
+    ) -> TensorF32 {
         assert!(!tokens.is_empty() && cache.len + tokens.len() <= self.context_limit());
         assert!(layers <= self.config.num_hidden_layers);
 
@@ -104,7 +131,7 @@ impl Model {
             shape: embedded.shape,
             data: embedded.data.into_iter().map(bf16_to_f32).collect(),
         };
-        let project = |input: &TensorF32, weights: &Tensor| self.project(input, weights);
+        let project = |input: &TensorF32, weights: &Tensor| self.project(input, weights, backend);
         for layer in 0..layers {
             let prefix = format!("model.layers.{layer}");
             let normalized = rms_norm(
@@ -143,7 +170,12 @@ impl Model {
     // Each returned token is the prediction after the corresponding input row.
     // Ordinary generation only needs the last row, while verification needs all of them.
     pub(crate) fn predict(&self, tokens: &[usize], cache: &mut KvCache, all: bool) -> Vec<usize> {
-        let mut hidden = self.append_hidden(tokens, self.config.num_hidden_layers, cache);
+        let backend = if cache.len == 0 {
+            self.prefill_backend
+        } else {
+            self.backend
+        };
+        let mut hidden = self.append_hidden(tokens, self.config.num_hidden_layers, cache, backend);
         let width = hidden.shape[1];
         if !all {
             let last_row = hidden.data.len() - width;
@@ -157,7 +189,7 @@ impl Model {
             .tensors
             .get("lm_head.weight")
             .unwrap_or(&self.weights.tensors["model.embed_tokens.weight"]);
-        let logits = self.project(&normalized, weights);
+        let logits = self.project(&normalized, weights, backend);
         logits
             .data
             .chunks_exact(logits.shape[1])
@@ -193,4 +225,51 @@ fn argmax(values: &[f32]) -> usize {
         }
     }
     best
+}
+
+impl std::str::FromStr for Backend {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "cpu" => Ok(Self::Cpu),
+            "metal" => Ok(Self::Metal),
+            _ => Err("backend must be cpu or metal"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Model {
+    pub(crate) fn constant_for_test(token: usize) -> Self {
+        use std::collections::HashMap;
+
+        let one = (1.0_f32.to_bits() >> 16) as u16;
+        let mut head = vec![0; 8];
+        head[token * 2] = one;
+        Self {
+            #[cfg(target_os = "macos")]
+            metal: None,
+            backend: Backend::Cpu,
+            prefill_backend: Backend::Cpu,
+            config: Config {
+                num_hidden_layers: 0,
+                max_position_embeddings: 6,
+                eos_token_id: 3,
+            },
+            weights: Weights {
+                model_name: "constant".into(),
+                tensors: HashMap::from([
+                    (
+                        "model.embed_tokens.weight".into(),
+                        Tensor::bf16(vec![4, 2], [one, 0].repeat(4)),
+                    ),
+                    (
+                        "model.norm.weight".into(),
+                        Tensor::bf16(vec![2], vec![one, one]),
+                    ),
+                    ("lm_head.weight".into(), Tensor::bf16(vec![4, 2], head)),
+                ]),
+            },
+        }
+    }
 }

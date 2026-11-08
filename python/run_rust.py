@@ -18,6 +18,11 @@ def main():
     parser.add_argument("--draft", nargs="?", const="Qwen3-0.6B")
     parser.add_argument("--gamma", type=int, default=5)
     parser.add_argument("--mxfp4", action="store_true")
+    parser.add_argument("--adaptive", action="store_true")
+    parser.add_argument("--max-gamma", type=int, default=8)
+    parser.add_argument("--prefill-backend", choices=["cpu", "metal"])
+    parser.add_argument("--draft-backend", choices=["cpu", "metal"])
+    parser.add_argument("--stats", action="store_true")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(ROOT / "weights" / args.model)
@@ -27,6 +32,14 @@ def main():
         command += ["--mxfp4"]
     if args.draft:
         command += ["--draft", args.draft, "--gamma", str(args.gamma)]
+    if args.adaptive:
+        command += ["--adaptive", "--max-gamma", str(args.max_gamma)]
+    if args.prefill_backend:
+        command += ["--prefill-backend", args.prefill_backend]
+    if args.draft_backend:
+        command += ["--draft-backend", args.draft_backend]
+    if args.stats:
+        command += ["--stats"]
     result = subprocess.run(
         command,
         input=json.dumps(prompt),
