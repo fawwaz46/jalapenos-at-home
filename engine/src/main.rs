@@ -9,7 +9,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = match args.next().as_deref() {
         Some("cpu") => Backend::Cpu,
         Some("metal") => Backend::Metal,
-        _ => return Err("usage: engine <cpu|metal> <model> <new tokens> [--draft <model>] [--gamma <count>] [--mxfp4] [--adaptive] [--max-gamma <count>] [--prefill-backend <cpu|metal>] [--draft-backend <cpu|metal>] [--stats] < prompt.json".into()),
+        Some("gpu") => Backend::Gpu,
+        _ => return Err("usage: engine <cpu|metal|gpu> <model> <new tokens> [--draft <model>] [--gamma <count>] [--mxfp4] [--adaptive] [--max-gamma <count>] [--prefill-backend <cpu|metal|gpu>] [--draft-backend <cpu|metal|gpu>] [--stats] < prompt.json".into()),
     };
     let mut name = args.next().ok_or("missing model")?;
     let count = args.next().ok_or("missing token count")?.parse()?;

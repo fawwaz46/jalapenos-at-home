@@ -8,6 +8,8 @@ use serde::Deserialize;
 #[cfg(target_os = "macos")]
 mod cpu;
 #[cfg(target_os = "macos")]
+mod gpu;
+#[cfg(target_os = "macos")]
 mod metal;
 mod model;
 mod mxfp4;

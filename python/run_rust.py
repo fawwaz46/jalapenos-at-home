@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("prompt")
-    parser.add_argument("--backend", choices=["cpu", "metal"], default="metal")
+    parser.add_argument("--backend", choices=["cpu", "metal", "gpu"], default="metal")
     parser.add_argument("--model", default="Qwen3-1.7B")
     parser.add_argument("--tokens", type=int, default=15)
     parser.add_argument("--draft", nargs="?", const="Qwen3-0.6B")
@@ -20,8 +20,8 @@ def main():
     parser.add_argument("--mxfp4", action="store_true")
     parser.add_argument("--adaptive", action="store_true")
     parser.add_argument("--max-gamma", type=int, default=8)
-    parser.add_argument("--prefill-backend", choices=["cpu", "metal"])
-    parser.add_argument("--draft-backend", choices=["cpu", "metal"])
+    parser.add_argument("--prefill-backend", choices=["cpu", "metal", "gpu"])
+    parser.add_argument("--draft-backend", choices=["cpu", "metal", "gpu"])
     parser.add_argument("--stats", action="store_true")
     args = parser.parse_args()
 

@@ -12,6 +12,8 @@ use crate::{
 pub enum Backend {
     Cpu,
     Metal,
+    /// The whole forward pass on the GPU, one submission per pass.
+    Gpu,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +26,8 @@ struct Config {
 pub struct Model {
     #[cfg(target_os = "macos")]
     metal: Option<crate::metal::Metal>,
+    #[cfg(target_os = "macos")]
+    gpu: Option<crate::gpu::GpuModel>,
     backend: Backend,
     prefill_backend: Backend,
     weights: Weights,
@@ -33,6 +37,8 @@ pub struct Model {
 pub(crate) struct KvCache {
     layers: Vec<LayerCache>,
     pub(crate) len: usize,
+    #[cfg(target_os = "macos")]
+    pub(crate) gpu: Option<crate::gpu::GpuCache>,
 }
 
 impl KvCache {
@@ -59,7 +65,11 @@ impl Model {
             .join("../weights")
             .join(name)
             .join("config.json");
-        let config = serde_json::from_slice(&fs::read(config)?)?;
+        let config: Config = serde_json::from_slice(&fs::read(config)?)?;
+        let uses_gpu = matches!(backend, Backend::Gpu) || matches!(prefill_backend, Backend::Gpu);
+        if uses_gpu && !(matches!(backend, Backend::Gpu) && matches!(prefill_backend, Backend::Gpu)) {
+            return Err("the gpu backend keeps the KV cache on the GPU, so prefill must use gpu too".into());
+        }
         #[cfg(target_os = "macos")]
         let metal =
             if matches!(backend, Backend::Metal) || matches!(prefill_backend, Backend::Metal) {
@@ -68,15 +78,31 @@ impl Model {
                 None
             };
         #[cfg(not(target_os = "macos"))]
-        if matches!(backend, Backend::Metal) || matches!(prefill_backend, Backend::Metal) {
+        if !matches!(backend, Backend::Cpu) || !matches!(prefill_backend, Backend::Cpu) {
             return Err("Metal is only available on macOS".into());
         }
+        #[allow(unused_mut)]
+        let mut weights = try_load(name)?;
+        #[cfg(target_os = "macos")]
+        let gpu = if uses_gpu {
+            let gpu = crate::gpu::GpuModel::new(&weights, config.num_hidden_layers)?;
+            // The GPU has its own copy now; keep only shapes on the CPU side.
+            for tensor in weights.tensors.values_mut() {
+                tensor.data = Vec::new();
+                tensor.mxfp4 = None;
+            }
+            Some(gpu)
+        } else {
+            None
+        };
         Ok(Self {
             #[cfg(target_os = "macos")]
             metal,
+            #[cfg(target_os = "macos")]
+            gpu,
             backend,
             prefill_backend,
-            weights: try_load(name)?,
+            weights,
             config,
         })
     }
@@ -101,6 +127,8 @@ impl Model {
                 .map(|_| LayerCache::default())
                 .collect(),
             len: 0,
+            #[cfg(target_os = "macos")]
+            gpu: self.gpu.as_ref().map(|gpu| gpu.cache()),
         }
     }
 
@@ -113,6 +141,15 @@ impl Model {
     }
 
     pub fn hidden(&self, tokens: &[usize], layers: usize) -> TensorF32 {
+        #[cfg(target_os = "macos")]
+        if let Some(gpu) = &self.gpu {
+            let data = gpu.hidden(tokens, layers, &mut self.cache());
+            let width = data.len() / tokens.len();
+            return TensorF32 {
+                shape: vec![tokens.len(), width],
+                data,
+            };
+        }
         self.append_hidden(tokens, layers, &mut self.cache(), self.prefill_backend)
     }
 
@@ -170,6 +207,11 @@ impl Model {
     // Each returned token is the prediction after the corresponding input row.
     // Ordinary generation only needs the last row, while verification needs all of them.
     pub(crate) fn predict(&self, tokens: &[usize], cache: &mut KvCache, all: bool) -> Vec<usize> {
+        #[cfg(target_os = "macos")]
+        if let Some(gpu) = &self.gpu {
+            assert!(!tokens.is_empty() && cache.len + tokens.len() <= self.context_limit());
+            return gpu.predict(tokens, cache, all);
+        }
         let backend = if cache.len == 0 {
             self.prefill_backend
         } else {
@@ -233,7 +275,8 @@ impl std::str::FromStr for Backend {
         match value {
             "cpu" => Ok(Self::Cpu),
             "metal" => Ok(Self::Metal),
-            _ => Err("backend must be cpu or metal"),
+            "gpu" => Ok(Self::Gpu),
+            _ => Err("backend must be cpu, metal or gpu"),
         }
     }
 }
@@ -249,6 +292,8 @@ impl Model {
         Self {
             #[cfg(target_os = "macos")]
             metal: None,
+            #[cfg(target_os = "macos")]
+            gpu: None,
             backend: Backend::Cpu,
             prefill_backend: Backend::Cpu,
             config: Config {
