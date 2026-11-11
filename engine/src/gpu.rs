@@ -41,11 +41,18 @@ unsafe extern "C" {
     fn gpu_finish(pass: *mut c_void) -> f64;
 }
 
-const KERNELS: [&str; 12] = [
+const KERNELS: [&str; 19] = [
+    "project_token_pairs",
+    "project_rows4",
+    "project_rows4_mxfp4",
+    "project_rows12",
+    "project_rows12_mxfp4",
+    "transpose_rows",
+    "project_rows8",
+    "project_rows8_mxfp4",
+    "project_token_blocks",
     "project",
-    "project_token",
     "project_mxfp4",
-    "project_token_mxfp4",
     "embed_bf16",
     "embed_mxfp4",
     "rms_norm",
@@ -254,6 +261,8 @@ struct Scratch {
     q: Buffer,
     attn: Buffer,
     tmp: Buffer,
+    /// Input rows interleaved for the small-batch kernels.
+    xt: Buffer,
     gate: Buffer,
     up: Buffer,
     logits: Buffer,
@@ -302,6 +311,8 @@ pub(crate) struct GpuModel {
     inter: usize,
     vocab: usize,
     scratch: RefCell<Option<Scratch>>,
+    /// The two MXFP4 values encoded by each possible byte.
+    pairs: Buffer,
     /// Total GPU busy time across passes, for profiling.
     pub(crate) gpu_seconds: Cell<f64>,
 }
@@ -323,22 +334,45 @@ fn ceil(a: usize, b: usize) -> usize {
 }
 
 impl GpuModel {
-    pub(crate) fn new(weights: &Weights, layer_count: usize) -> Result<Self, String> {
+    /// Uploads one tensor at a time and frees its CPU copy right after.
+    pub(crate) fn new(weights: &mut Weights, layer_count: usize) -> Result<Self, String> {
         let device = Device::new()?;
-        let get = |name: &str| {
-            weights
-                .tensors
-                .get(name)
-                .ok_or_else(|| format!("missing tensor {name}"))
+        // An output table identical to the embedding table is stored once.
+        let tied = match (weights.tensors.get("lm_head.weight"), weights.tensors.get("model.embed_tokens.weight")) {
+            (Some(head), Some(embed)) => {
+                head.shape == embed.shape
+                    && head.data == embed.data
+                    && match (&head.mxfp4, &embed.mxfp4) {
+                        (Some(a), Some(b)) => a.packed == b.packed && a.scales == b.scales,
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => false,
+        };
+        if tied {
+            let head = weights.tensors.get_mut("lm_head.weight").unwrap();
+            head.data = Vec::new();
+            head.mxfp4 = None;
+        }
+        let weights = RefCell::new(weights);
+        let take = |name: &str| -> Result<Tensor, String> {
+            let mut weights = weights.borrow_mut();
+            let tensor = weights.tensors.get_mut(name).ok_or_else(|| format!("missing tensor {name}"))?;
+            Ok(Tensor {
+                shape: tensor.shape.clone(),
+                data: std::mem::take(&mut tensor.data),
+                mxfp4: tensor.mxfp4.take(),
+            })
         };
         let norm = |name: &str| -> Result<Buffer, String> {
-            let tensor = get(name)?;
+            let tensor = take(name)?;
             if tensor.mxfp4.is_some() {
                 return Err(format!("expected a bf16 norm weight: {name}"));
             }
             Ok(device.upload(&tensor.data))
         };
-        let matrix = |name: &str| get(name).map(|t| GpuTensor::new(&device, t));
+        let matrix = |name: &str| take(name).map(|t| GpuTensor::new(&device, &t));
 
         let mut layers = Vec::with_capacity(layer_count);
         for layer in 0..layer_count {
@@ -358,10 +392,8 @@ impl GpuModel {
             });
         }
         let embed = matrix("model.embed_tokens.weight")?;
-        let lm_head = weights
-            .tensors
-            .get("lm_head.weight")
-            .map(|t| GpuTensor::new(&device, t));
+        let has_head = weights.borrow().tensors.contains_key("lm_head.weight");
+        let lm_head = if has_head && !tied { Some(matrix("lm_head.weight")?) } else { None };
         let final_norm = norm("model.norm.weight")?;
         let first = layers.first().ok_or("model has no layers")?;
         let hidden = embed.inner;
@@ -372,8 +404,15 @@ impl GpuModel {
         if q_heads % kv_heads != 0 || first.q.inner != hidden {
             return Err("unexpected attention shapes".into());
         }
+        let level = |code: usize| {
+            let value = [0.0f32, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0][code & 7];
+            if code & 8 != 0 { -value } else { value }
+        };
+        let pairs: Vec<f32> = (0..256).flat_map(|byte| [level(byte & 15), level(byte >> 4)]).collect();
+        let pairs = device.upload(&pairs);
         Ok(Self {
             device,
+            pairs,
             embed,
             lm_head,
             final_norm,
@@ -417,6 +456,7 @@ impl GpuModel {
                 q: f(rows * self.q_heads * HEAD_DIM),
                 attn: f(rows * self.q_heads * HEAD_DIM),
                 tmp: f(rows * self.hidden),
+                xt: f(rows.max(16) * self.hidden.max(self.inter).max(self.q_heads * HEAD_DIM)),
                 gate: f(rows * self.inter),
                 up: f(rows * self.inter),
                 logits: f(rows * self.vocab),
@@ -426,17 +466,49 @@ impl GpuModel {
         RefMut::map(slot, |s| s.as_mut().unwrap())
     }
 
-    fn matmul(&self, pass: &Pass, x: (&Buffer, usize), w: &GpuTensor, y: (&Buffer, usize), rows: usize) {
+    fn matmul(&self, pass: &Pass, x: (&Buffer, usize), w: &GpuTensor, y: (&Buffer, usize), rows: usize, xt: &Buffer) {
+        let params = [rows as u32, w.out as u32, w.inner as u32, 0];
+        let quantized = w.scales.is_some();
         let mut binds = vec![(0, x.0, x.1), (1, &w.data, 0), (2, y.0, y.1)];
         if let Some(scales) = &w.scales {
             binds.push((4, scales, 0));
         }
-        let params = [rows as u32, w.out as u32, w.inner as u32, 0];
-        let quantized = w.scales.is_some();
         if rows == 1 {
-            let kernel = if quantized { "project_token_mxfp4" } else { "project_token" };
+            let kernel = if quantized {
+                binds.push((5, &self.pairs, 0));
+                "project_token_blocks"
+            } else {
+                "project_token_pairs"
+            };
             pass.dispatch(kernel, &binds, &params, 3, [ceil(w.out, 8), 1, 1], [256, 1, 1]);
+        } else if rows <= 32 {
+            // up to 12 tokens share one weight read; more are split into groups of 8
+            let batch = match rows {
+                0..=4 => 4,
+                9..=12 => 12,
+                _ => 8,
+            };
+            let chunks = ceil(rows, batch);
+            pass.dispatch(
+                "transpose_rows",
+                &[(0, x.0, x.1), (1, xt, 0)],
+                &[rows as u32, w.inner as u32, batch as u32],
+                2,
+                [ceil(w.inner, 256), chunks * batch, 1],
+                [256, 1, 1],
+            );
+            binds[0] = (0, xt, 0);
+            let kernel = match (quantized, batch) {
+                (false, 4) => "project_rows4",
+                (false, 8) => "project_rows8",
+                (false, _) => "project_rows12",
+                (true, 4) => "project_rows4_mxfp4",
+                (true, 8) => "project_rows8_mxfp4",
+                (true, _) => "project_rows12_mxfp4",
+            };
+            pass.dispatch(kernel, &binds, &params, 3, [ceil(w.out, 8), chunks, 1], [256, 1, 1]);
         } else {
+            // long prompts use the tiled kernel
             let kernel = if quantized { "project_mxfp4" } else { "project" };
             pass.dispatch(kernel, &binds, &params, 3, [ceil(w.out, 16), ceil(rows, 16), 1], [16, 16, 1]);
         }
@@ -503,10 +575,10 @@ impl GpuModel {
             let values = &gpu_cache.values[index];
 
             self.rms_norm(&pass, (&s.x, 0), &layer.input_norm, (&s.xn, 0), rows, self.hidden);
-            self.matmul(&pass, (&s.xn, 0), &layer.q, (&s.q, 0), rows);
+            self.matmul(&pass, (&s.xn, 0), &layer.q, (&s.q, 0), rows, &s.xt);
             // New keys and values are written straight into the cache.
-            self.matmul(&pass, (&s.xn, 0), &layer.k, (keys, kv_offset), rows);
-            self.matmul(&pass, (&s.xn, 0), &layer.v, (values, kv_offset), rows);
+            self.matmul(&pass, (&s.xn, 0), &layer.k, (keys, kv_offset), rows, &s.xt);
+            self.matmul(&pass, (&s.xn, 0), &layer.v, (values, kv_offset), rows, &s.xt);
             self.rms_norm(&pass, (&s.q, 0), &layer.q_norm, (&s.q, 0), rows * self.q_heads, HEAD_DIM);
             self.rms_norm(&pass, (keys, kv_offset), &layer.k_norm, (keys, kv_offset), rows * self.kv_heads, HEAD_DIM);
             self.rope(&pass, (&s.q, 0), rows, self.q_heads, offset);
@@ -519,14 +591,14 @@ impl GpuModel {
                 [self.q_heads, rows, 1],
                 [HEAD_DIM, 1, 1],
             );
-            self.matmul(&pass, (&s.attn, 0), &layer.o, (&s.tmp, 0), rows);
+            self.matmul(&pass, (&s.attn, 0), &layer.o, (&s.tmp, 0), rows, &s.xt);
             self.elementwise(&pass, "add", &s.x, &s.tmp, rows * self.hidden);
 
             self.rms_norm(&pass, (&s.x, 0), &layer.post_norm, (&s.xn, 0), rows, self.hidden);
-            self.matmul(&pass, (&s.xn, 0), &layer.gate, (&s.gate, 0), rows);
-            self.matmul(&pass, (&s.xn, 0), &layer.up, (&s.up, 0), rows);
+            self.matmul(&pass, (&s.xn, 0), &layer.gate, (&s.gate, 0), rows, &s.xt);
+            self.matmul(&pass, (&s.xn, 0), &layer.up, (&s.up, 0), rows, &s.xt);
             self.elementwise(&pass, "silu_mul", &s.gate, &s.up, rows * self.inter);
-            self.matmul(&pass, (&s.gate, 0), &layer.down, (&s.tmp, 0), rows);
+            self.matmul(&pass, (&s.gate, 0), &layer.down, (&s.tmp, 0), rows, &s.xt);
             self.elementwise(&pass, "add", &s.x, &s.tmp, rows * self.hidden);
         }
         cache.len = total;
@@ -543,7 +615,7 @@ impl GpuModel {
                 let (first, count) = if all { (0, rows) } else { (rows - 1, 1) };
                 let lm_head = self.lm_head.as_ref().unwrap_or(&self.embed);
                 self.rms_norm(&pass, (&s.x, first * self.hidden * 4), &self.final_norm, (&s.xn, 0), count, self.hidden);
-                self.matmul(&pass, (&s.xn, 0), lm_head, (&s.logits, 0), count);
+                self.matmul(&pass, (&s.xn, 0), lm_head, (&s.logits, 0), count, &s.xt);
                 pass.dispatch(
                     "argmax_rows",
                     &[(0, &s.logits, 0), (1, &s.out_ids, 0)],

@@ -85,7 +85,7 @@ impl Model {
         let mut weights = try_load(name)?;
         #[cfg(target_os = "macos")]
         let gpu = if uses_gpu {
-            let gpu = crate::gpu::GpuModel::new(&weights, config.num_hidden_layers)?;
+            let gpu = crate::gpu::GpuModel::new(&mut weights, config.num_hidden_layers)?;
             // The GPU has its own copy now; keep only shapes on the CPU side.
             for tensor in weights.tensors.values_mut() {
                 tensor.data = Vec::new();
@@ -237,6 +237,32 @@ impl Model {
             .chunks_exact(logits.shape[1])
             .map(argmax)
             .collect()
+    }
+
+    /// Profiling: median wall and GPU milliseconds for one pass over `rows`
+    /// tokens appended after `prompt`, predicting after every row.
+    #[cfg(target_os = "macos")]
+    pub fn time_pass(&self, prompt: &[usize], rows: usize, reps: usize) -> (f64, f64) {
+        let gpu = self.gpu.as_ref().expect("time_pass needs the gpu backend");
+        let mut cache = self.cache();
+        self.predict(prompt, &mut cache, false);
+        let tokens: Vec<usize> = prompt.iter().copied().cycle().take(rows).collect();
+        let (mut wall, mut busy) = (Vec::new(), Vec::new());
+        for _ in 0..reps + 2 {
+            let before = gpu.gpu_seconds.get();
+            let started = std::time::Instant::now();
+            self.predict(&tokens, &mut cache, rows > 1);
+            wall.push(started.elapsed().as_secs_f64() * 1000.0);
+            busy.push((gpu.gpu_seconds.get() - before) * 1000.0);
+            cache.truncate(prompt.len());
+        }
+        // The first two passes warm up the GPU and are dropped.
+        let median = |v: &mut Vec<f64>| {
+            v.drain(..2);
+            v.sort_by(f64::total_cmp);
+            v[v.len() / 2]
+        };
+        (median(&mut wall), median(&mut busy))
     }
 
     pub fn generate(&self, prompt: &[usize], count: usize) -> Vec<usize> {

@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut prefill_backend: Option<Backend> = None;
     let mut draft_backend: Option<Backend> = None;
     let mut stats = false;
+    let mut time_rows: Option<String> = None;
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--adaptive" => adaptive = true,
@@ -33,6 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 draft_backend = Some(args.next().ok_or("missing draft backend")?.parse()?)
             }
             "--stats" => stats = true,
+            "--time-rows" => time_rows = Some(args.next().ok_or("missing row counts")?),
             "--mxfp4" => mxfp4 = true,
             "--draft" => draft_name = Some(args.next().ok_or("missing draft model")?),
             "--gamma" => gamma = args.next().ok_or("missing gamma")?.parse()?,
@@ -60,6 +62,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         draft_name = draft_name.map(|name| format!("{name}-MXFP4"));
     }
     let model = Model::load_with_prefill(&name, backend, prefill_backend.unwrap_or(backend))?;
+    #[cfg(target_os = "macos")]
+    if let Some(list) = time_rows {
+        // Profiling: how long one pass takes for each number of tokens.
+        for rows in list.split(',') {
+            let rows: usize = rows.parse()?;
+            let (wall_ms, gpu_ms) = model.time_pass(&prompt, rows, 15);
+            println!("{}", serde_json::json!({"rows": rows, "wall_ms": wall_ms, "gpu_ms": gpu_ms}));
+        }
+        return Ok(());
+    }
     let tokens = if let Some(draft_name) = draft_name {
         let draft_backend = draft_backend.unwrap_or(backend);
         let draft = Model::load_with_prefill(
