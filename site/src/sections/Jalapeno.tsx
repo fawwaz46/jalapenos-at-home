@@ -24,17 +24,11 @@ export function Jalapeno({ onNext }: { onNext: () => void }) {
 		<section className="scroll-area h-full w-full">
 			<div className="px-6 pt-24 pb-24 md:px-10 lg:pt-28">
 				<Eyebrow index="03">The chip</Eyebrow>
-				<div className="mt-8 grid gap-8 md:grid-cols-12 md:items-end">
-					<h2 className="text-[15vw] font-medium leading-[0.8] tracking-[-0.06em] md:col-span-8 md:text-[9.5vw]">
-						Where it meets
-						<br />
-						Jalapeño
-					</h2>
-					<p className="max-w-[36ch] text-lg leading-snug tracking-[-0.02em] text-paper/70 md:col-span-4 md:pb-2">
-						Jalapeño is OpenAI's inference chip, shown at Hot Chips 2026. These are its ideas, and how they carry
-						over to a laptop.
-					</p>
-				</div>
+				<h2 className="mt-8 text-[15vw] font-medium leading-[0.8] tracking-[-0.06em] md:text-[9.5vw]">
+					Where it meets
+					<br />
+					Jalapeño
+				</h2>
 
 				<div className="mt-16">
 				<div className="border-t border-line">
