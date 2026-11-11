@@ -16,19 +16,12 @@ export function Why({ onNext }: { onNext: () => void }) {
 				</motion.h2>
 				<motion.p
 					{...rise(0.8)}
-					className="mt-8 max-w-[40ch] text-lg leading-snug tracking-[-0.02em] text-paper/65 md:text-2xl"
+					className="mt-8 max-w-[36ch] text-lg leading-snug tracking-[-0.02em] text-paper/65 md:text-2xl"
 				>
-					I wanted to understand inference from the inside: what actually happens between a prompt and the next
-					token, and where the time really goes.
+					I wanted to see what actually happens between a prompt and the next token. So I took the ideas behind a
+					data-center chip and tried them on my laptop.
 				</motion.p>
-				<motion.p
-					{...rise(0.95)}
-					className="mt-5 max-w-[40ch] text-lg leading-snug tracking-[-0.02em] text-paper/65 md:text-2xl"
-				>
-					I was told the way to learn something deeply is to build something difficult. So I took the ideas behind a
-					data-center chip and rebuilt them on a laptop.
-				</motion.p>
-				<motion.div {...rise(1.15)} className="mt-12">
+				<motion.div {...rise(0.95)} className="mt-12">
 					<Pill onClick={onNext}>Find me</Pill>
 				</motion.div>
 			</div>
