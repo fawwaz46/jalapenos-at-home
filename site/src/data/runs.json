@@ -1,0 +1,856 @@
+{
+ "model": "Qwen3-1.7B",
+ "draft": "Qwen3-0.6B",
+ "backend": "gpu",
+ "precision": "bf16",
+ "tokens": 48,
+ "runs": [
+  {
+   "prompt": "To make a simple loaf of bread",
+   "output": ", you need 100g of flour, 50g of water, and 100g of salt. How many grams of flour are needed to make 3 loaves of bread? To make 3 lo",
+   "accepted": 22,
+   "drafted": 49,
+   "verify_passes": 27,
+   "draft_passes": 48,
+   "elapsed_ms": 1525.8567919999998,
+   "rounds": [
+    {
+     "gamma": 5,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      ",",
+      " a",
+      " baker",
+      " needs",
+      " "
+     ],
+     "target": " you",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " need",
+      " "
+     ],
+     "target": "1",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      "/",
+      "2",
+      " cup"
+     ],
+     "target": "0",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      "0"
+     ],
+     "target": "g",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " of",
+      " flour"
+     ],
+     "target": ",",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 1,
+     "proposed": [
+      " ",
+      "2",
+      "0"
+     ],
+     "target": "5",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      "0"
+     ],
+     "target": "g",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " of",
+      " water"
+     ],
+     "target": ",",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " ",
+      "2",
+      "0"
+     ],
+     "target": " and",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " "
+     ],
+     "target": "1",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      "0",
+      "0"
+     ],
+     "target": "g",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 1,
+     "proposed": [
+      " of",
+      " yeast",
+      "."
+     ],
+     "target": " salt",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      "."
+     ],
+     "target": " How",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " much",
+      " does"
+     ],
+     "target": " many",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " kilograms"
+     ],
+     "target": " grams",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " of"
+     ],
+     "target": " flour",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      ",",
+      " water"
+     ],
+     "target": " are",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " needed"
+     ],
+     "target": " to",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " make",
+      " a"
+     ],
+     "target": " ",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      "1",
+      "0"
+     ],
+     "target": "3",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      "0"
+     ],
+     "target": " lo",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      "aves"
+     ],
+     "target": " of",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " bread",
+      "?\n\n"
+     ],
+     "target": "?",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " Also",
+      ","
+     ],
+     "target": " To",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " solve"
+     ],
+     "target": " make",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " "
+     ],
+     "target": "3",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " lo"
+     ],
+     "target": null,
+     "bonus": true
+    }
+   ],
+   "replay_mismatches": 0
+  },
+  {
+   "prompt": "The fastest way to learn a new language is",
+   "output": " to immerse yourself in it. This is a common saying, but is it true? What are the best ways to learn a new language? How can I learn a new language quickly? What are the best ways to learn a new language",
+   "accepted": 28,
+   "drafted": 47,
+   "verify_passes": 20,
+   "draft_passes": 46,
+   "elapsed_ms": 1292.805625,
+   "rounds": [
+    {
+     "gamma": 5,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " to",
+      " practice",
+      " it",
+      ".",
+      " But"
+     ],
+     "target": " immer",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      "se",
+      " yourself"
+     ],
+     "target": " in",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " the",
+      " language",
+      "."
+     ],
+     "target": " it",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      "."
+     ],
+     "target": " This",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " is",
+      " because"
+     ],
+     "target": " a",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " well",
+      "-known"
+     ],
+     "target": " common",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " belief"
+     ],
+     "target": " saying",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " that"
+     ],
+     "target": ",",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " but"
+     ],
+     "target": " is",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " it",
+      " true"
+     ],
+     "target": "?",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " The",
+      " answer",
+      " is"
+     ],
+     "target": " What",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " are"
+     ],
+     "target": " the",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " benefits",
+      " of"
+     ],
+     "target": " best",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " ways"
+     ],
+     "target": " to",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " learn",
+      " a"
+     ],
+     "target": " new",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " language",
+      "?",
+      " What"
+     ],
+     "target": " How",
+     "bonus": false
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " can",
+      " I",
+      " improve"
+     ],
+     "target": " learn",
+     "bonus": false
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 4,
+     "accepted": 3,
+     "proposed": [
+      " a",
+      " new",
+      " language"
+     ],
+     "target": " quickly",
+     "bonus": true
+    },
+    {
+     "gamma": 4,
+     "next_gamma": 5,
+     "accepted": 4,
+     "proposed": [
+      "?",
+      " What",
+      " are",
+      " the"
+     ],
+     "target": " best",
+     "bonus": true
+    },
+    {
+     "gamma": 5,
+     "next_gamma": 6,
+     "accepted": 5,
+     "proposed": [
+      " ways",
+      " to",
+      " learn",
+      " a",
+      " new"
+     ],
+     "target": " language",
+     "bonus": true
+    }
+   ],
+   "replay_mismatches": 0
+  },
+  {
+   "prompt": "A GPU is different from a CPU because",
+   "output": " it is designed for parallel processing. A GPU is made up of many smaller, more powerful processing units, which are arranged in a grid of rows and columns. Each processing unit is capable of performing a number of operations simultaneously. This makes it",
+   "accepted": 21,
+   "drafted": 49,
+   "verify_passes": 27,
+   "draft_passes": 48,
+   "elapsed_ms": 1471.6088750000001,
+   "rounds": [
+    {
+     "gamma": 5,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " it",
+      " has",
+      " a",
+      " different",
+      " set"
+     ],
+     "target": " is",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " not",
+      " a"
+     ],
+     "target": " designed",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " for"
+     ],
+     "target": " parallel",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " processing",
+      "."
+     ],
+     "target": " A",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " GPU",
+      " is",
+      " a"
+     ],
+     "target": " made",
+     "bonus": false
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " for",
+      " high",
+      " performance"
+     ],
+     "target": " up",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " of"
+     ],
+     "target": " many",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " small",
+      ","
+     ],
+     "target": " smaller",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " processors"
+     ],
+     "target": ",",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " specialized"
+     ],
+     "target": " more",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " efficient"
+     ],
+     "target": " powerful",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " processors"
+     ],
+     "target": " processing",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " units"
+     ],
+     "target": ",",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " each",
+      " of"
+     ],
+     "target": " which",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " are"
+     ],
+     "target": " arranged",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " in",
+      " a"
+     ],
+     "target": " grid",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      ".",
+      " Each",
+      " unit"
+     ],
+     "target": " of",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " "
+     ],
+     "target": " rows",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " and"
+     ],
+     "target": " columns",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      ".",
+      " Each"
+     ],
+     "target": " processing",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 1,
+     "accepted": 1,
+     "proposed": [
+      " unit",
+      " can",
+      " perform"
+     ],
+     "target": " is",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 1,
+     "accepted": 0,
+     "proposed": [
+      " responsible"
+     ],
+     "target": " capable",
+     "bonus": false
+    },
+    {
+     "gamma": 1,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " of"
+     ],
+     "target": " performing",
+     "bonus": true
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 2,
+     "accepted": 1,
+     "proposed": [
+      " a",
+      " single"
+     ],
+     "target": " number",
+     "bonus": false
+    },
+    {
+     "gamma": 2,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      " of",
+      " operations"
+     ],
+     "target": " simultaneously",
+     "bonus": true
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 3,
+     "accepted": 2,
+     "proposed": [
+      ".",
+      " This",
+      " is"
+     ],
+     "target": " makes",
+     "bonus": false
+    },
+    {
+     "gamma": 3,
+     "next_gamma": 3,
+     "accepted": 0,
+     "proposed": [
+      " the"
+     ],
+     "target": " it",
+     "bonus": false
+    }
+   ],
+   "replay_mismatches": 0
+  }
+ ]
+}

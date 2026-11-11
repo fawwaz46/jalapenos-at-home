@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@font-face { font-family: "Favorit"; src: url("/fonts/Favorit-Light.otf") format("opentype"); font-weight: 300; font-display: swap; }
+@font-face { font-family: "Favorit"; src: url("/fonts/Favorit-Regular.otf") format("opentype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Favorit"; src: url("/fonts/Favorit-Book.otf") format("opentype"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Favorit"; src: url("/fonts/Favorit-Medium.otf") format("opentype"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Favorit"; src: url("/fonts/Favorit-Bold.otf") format("opentype"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Favorit Mono"; src: url("/fonts/FavoritMono-Regular.otf") format("opentype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Favorit Mono"; src: url("/fonts/FavoritMono-Medium.otf") format("opentype"); font-weight: 500; font-display: swap; }
+
+@theme {
+	--color-ink: #ffffff;
+	--color-dark: #ffffff; /* text on a filled (black) surface */
+	--color-panel: #f4f3f1;
+	--color-line: rgba(0, 0, 0, 0.12);
+	--color-gray: #6f6b66;
+	--color-paper: #0a0a0a;
+	/* the liquid */
+	--color-chili: #e8341c;
+	--color-chili-deep: #9e1c0c;
+	--color-chili-hot: #ff6a4d;
+	/* draft verdicts (validated pair, light surface) */
+	--color-accept: #2e8f63;
+	--color-reject: #e8341c;
+
+	--font-sans: "Favorit", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+	--font-mono: "Favorit Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+}
+
+html {
+	font-family: var(--font-sans);
+	background: var(--color-ink);
+	color: var(--color-paper);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+body {
+	overflow: hidden;
+}
+
+::selection {
+	background: var(--color-chili);
+	color: #fff;
+}
+
+/* pages 2-4 use a deep red ink instead of black */
+.theme-red {
+	--color-paper: #7a1408;
+	--color-gray: #a0554a;
+	--color-line: rgba(122, 20, 8, 0.16);
+	--color-panel: #fbf1ee;
+	color: var(--color-paper);
+}
+
+/* film grain over everything, like the Behold site photography */
+.grain::after {
+	content: "";
+	position: fixed;
+	inset: -50%;
+	pointer-events: none;
+	z-index: 60;
+	opacity: 0.05;
+	mix-blend-mode: multiply;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+	animation: grain 0.9s steps(4) infinite;
+}
+
+@keyframes grain {
+	0% { transform: translate(0, 0); }
+	25% { transform: translate(-3%, 2%); }
+	50% { transform: translate(2%, -3%); }
+	75% { transform: translate(-2%, -1%); }
+	100% { transform: translate(0, 0); }
+}
+
+.scroll-area {
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.grain::after { animation: none; }
+}

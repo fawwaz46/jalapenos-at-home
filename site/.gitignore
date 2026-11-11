@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# Favorit is Behold's licensed font; keep it local only
+public/fonts/
+*.tsbuildinfo
