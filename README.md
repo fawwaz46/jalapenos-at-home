@@ -18,4 +18,4 @@ m5 macbook air (32 gb), 64 tokens, median of 5 runs. output matches pytorch toke
 
 ## how it was made
 
-python baseline and rust transformer written by hand. gpu code was written with claude with me directing and testing
+python baseline and rust transformer written by hand. gpu backend, quantization, speed work, tests, and website were written with claude with me directing and testing
