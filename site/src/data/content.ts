@@ -1,6 +1,7 @@
 // numbers are from runs on the M5 MacBook Air (32 GB), 2026-11-11
 
 export const links = {
+	repo: "https://github.com/fawwaz46/jalapenos-at-home",
 	// Not shown on the site yet; add it back to the list in sections/Contact.tsx.
 	github: "https://github.com/fawwaz46",
 	x: "https://x.com/46waz",

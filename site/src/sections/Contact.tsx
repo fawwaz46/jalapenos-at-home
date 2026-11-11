@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import { links } from "../data/content";
 
 const items = [
+	{ name: "Project Repo", href: links.repo },
 	{ name: "X / Twitter", href: links.x },
 	{ name: "LinkedIn", href: links.linkedin },
 ];
