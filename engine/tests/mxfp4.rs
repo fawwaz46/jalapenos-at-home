@@ -64,18 +64,25 @@ fn quantized_model_matches_python_hidden_state() {
             }
         }
     }
-    let model = Model::load(name, Backend::Cpu).unwrap();
-    let actual = model.hidden(&prompt, 1);
     let expected: Vec<_> = expected.into_iter().flatten().collect();
-    assert_eq!(actual.data.len(), expected.len());
-    let error: f64 = actual
-        .data
-        .iter()
-        .zip(&expected)
-        .map(|(&a, &b)| f64::from(a - b).powi(2))
-        .sum();
-    let scale: f64 = expected.iter().map(|&v| f64::from(v).powi(2)).sum();
-    assert!((error / scale).sqrt() < 1e-5);
+    let mut backends = vec![Backend::Cpu];
+    if cfg!(target_os = "macos") {
+        backends.push(Backend::Gpu);
+    }
+    for backend in backends {
+        let model = Model::load(name, backend).unwrap();
+        let actual = model.hidden(&prompt, 1);
+        assert_eq!(actual.data.len(), expected.len());
+        let error: f64 = actual
+            .data
+            .iter()
+            .zip(&expected)
+            .map(|(&a, &b)| f64::from(a - b).powi(2))
+            .sum();
+        let scale: f64 = expected.iter().map(|&v| f64::from(v).powi(2)).sum();
+        let relative = (error / scale).sqrt();
+        assert!(relative < 1e-5, "{backend:?}: relative error {relative}");
+    }
 }
 
 #[test]

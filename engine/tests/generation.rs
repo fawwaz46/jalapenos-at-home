@@ -40,6 +40,38 @@ fn metal_matches_python() {
     check_reference(Backend::Metal);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires Qwen weights, the Python reference fixture and a Metal device"]
+fn gpu_matches_python() {
+    check_reference(Backend::Gpu);
+}
+
+// Speculative decoding on the GPU-resident backend must reproduce plain greedy
+// output, for bf16 and MXFP4, through rejected drafts and KV cache rollback.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires both Qwen models, the Python reference fixture and a Metal device"]
+fn gpu_speculative_matches_greedy() {
+    use engine::{DraftSchedule, generate_scheduled};
+
+    let (expected, _) = reference_load("reference_qwen3-1.7b_0.safetensors", "hidden_1");
+    let prompt = &expected[..20];
+    for suffix in ["", "-MXFP4"] {
+        let target = Model::load(&format!("Qwen3-1.7B{suffix}"), Backend::Gpu).unwrap();
+        let draft = Model::load(&format!("Qwen3-0.6B{suffix}"), Backend::Gpu).unwrap();
+        let greedy = target.generate(prompt, 40);
+        if suffix.is_empty() {
+            assert_eq!(greedy[..expected.len()], expected[..]);
+        }
+        for schedule in [DraftSchedule::fixed(5), DraftSchedule::adaptive(5, 8).unwrap()] {
+            let result = generate_scheduled(&target, &draft, prompt, 40, schedule);
+            assert_eq!(result.tokens, greedy, "{suffix}");
+            assert!(result.accepted < result.drafted, "expected some rejections");
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires both Qwen models and the generated Python reference fixture"]
 fn speculative_matches_greedy_after_rejections() {
